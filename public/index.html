@@ -1,0 +1,1150 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8" />
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale:1, user-scalable: yes" />
+    <title>Renaissance</title>
+    <link rel="stylesheet" href="leaflet/leaflet.css"/>
+    <script src="leaflet/leaflet.js"></script>
+    <script src="leaflet/leaflet.rotatedMarker.js"></script>
+    <script src="js/jquery-3.5.1.min.js"></script>
+    <script src="js/steelseries.js"></script>
+    <style>
+       body {
+          padding: 0;
+          margin: 0;
+       }
+       html, body, #map {
+          height: 100%;
+          width: 100%;
+          min-width: 1200px;
+          z-index: 1;
+          position: relative;
+       }
+
+       #map_container {
+          height: 100%;
+          width: 100%;
+          z-index: 1;
+          position: relative;
+       }
+
+       #centerBoat {
+          position: absolute;
+          top: 90px;
+          left: 15px;
+          z-index: 99;
+          display: none;
+       }
+
+       #info {
+          display: none;
+          position: absolute;
+          bottom: 0px;
+          left: 50%;
+	  width: 1090px;
+	  height: 205px;
+	  margin-left: -545px;
+          z-index: 99;
+	  opacity: 1;
+	  text-align: center;
+	  color: white;
+       }
+
+       #notifications {
+          width: 100%;
+          height: 35px;
+          text-align: left;
+          overflow-y: auto;
+          margin-bottom: 5px;
+          padding: 5px;
+          opacity: 0.5;
+          border-radius: 7px;
+	  background: #000;
+          border: 2px solid #000; 
+          font-size: 14pt;
+       }
+
+       tr.notification td {
+          padding-bottom: 3px;
+       }
+       a {
+          text-decoration: none;
+          color: inherit;
+       }
+       .bold {
+          font-weight: bold;
+       }
+    </style>
+</head>
+<body>
+<div id="map_container">
+  <div id="map"></div>
+  <div id="centerBoat">
+    <a href="#" onclick="resumeAutoPan();">
+      <img src="img/boat.png" style="width: 24px; height: 48px;">
+    </a>
+  </div>
+  <div id="info">
+    <div id="notifications">
+      <div style="position: absolute; right:0;top:5px;font-size:12pt;">
+        <a href="#" onclick="removeNotificationsPane()" style="text-decoration: none; color: inherit;">&#x2715;</a>
+      </div>
+      <table>
+        <div id="notificationsContent"></div> 
+      </table>
+    </div>
+    <table>
+    <tr>
+      <td>
+        <canvas id='speed' width='180' height='70' onclick='toggleSpeedWaypointGauge()'></canvas>
+        <canvas style='display: none;' id='waypoint' width='180' height='70' onclick='toggleSpeedWaypointGauge()'></canvas>
+        <canvas style='display: none;' id='anchorCanvas' width='180' height='70' onclick='window.open("/signalk-anchoralarm-plugin")'></canvas><br/>
+        <canvas id='wind' width='180' height='70'></canvas><br/>
+      </td>
+      <td>
+        <canvas id='battery' width='180' height='70'></canvas><br/>
+        <canvas id='batteryVoltage' width='180' height='70'></canvas><br/>
+      </td>
+      <td>
+        <canvas id='solar' width='220' height='70'></canvas><br/>
+        <canvas id='depth' width='180' height='70'></canvas><br/>
+      </td>
+      <td>
+        <canvas id='cockpit' width='180' height='70'></canvas><br/>
+        <canvas id='fridge' width='180' height='70' onclick='toggleTemperatureGauge()'></canvas>
+        <canvas style='display: none;' id='cabin' width='180' height='70' onclick='toggleTemperatureGauge()'></canvas><br/>
+      </td>
+      <td>
+        <canvas id='waterTank' width='220' height='70'></canvas><br/>
+        <canvas id='holdingTank' width='220' height='70'></canvas><br/>
+      </td>
+      <td>
+        <canvas id='exhaust' width='180' height='70'></canvas><br/>
+        <canvas id='barometer' width='220' height='70' onclick='window.open("/signalk-barometer")'></canvas><br/>
+      </td>
+    </tr>
+    </table>
+ </div>
+<script>
+  var boat;
+  var anchor;
+  var anchorRadius;
+  var mmsi;
+  var currentLatitude;
+  var currentLongitude;
+  var target = {};
+  var weatherStation = {};
+  var pois = {};
+  var pin;
+  var sinceTs;
+  var notifications = [];
+  var preventMapPan = false;
+  var currentTemperatureGauge = 'fridge';
+  var currentSpeedWaypointGauge= 'speed';
+  var lastAisHubContact;
+
+  var map = L.map('map');
+  map.whenReady(function() {
+    updateContent();
+    $('#info').show();
+  });
+  map.setView([39.8283, -98.5795], 5);
+
+  map.on('dragend', function(e) {
+    stopAutoPan();
+  });
+
+  map.on('popupopen', function(e) {
+    stopAutoPan();
+  });
+
+  map.on('zoomend', function() {
+    let zoom = map.getZoom();
+    for (let poiId in pois) {
+      let poi = pois[poiId];
+      let icon = getPoiIcon(poi.type, zoom);
+      poi.marker.setIcon(icon);
+    }
+  });
+
+  var boatIcon = L.icon({
+    iconUrl: 'img/boat.png',
+    iconSize:     [24, 48], // size of the icon
+    iconAnchor:   [24, 48], // point of the icon which will correspond to marker's location
+  });
+  var anchorIcon = L.icon({
+    iconUrl: 'img/anchor.png',
+    iconSize:     [24, 24], // size of the icon
+    iconAnchor:   [12, 12], // point of the icon which will correspond to marker's location
+  });
+  var aisIcon = L.icon({
+    iconUrl: 'img/ais_boat.png',
+    iconSize:     [24, 24], // size of the icon
+    iconAnchor:   [12, 12], // point of the icon which will correspond to marker's location
+  });
+  var aisBigIcon = L.icon({
+    iconUrl: 'img/ais_boat.png',
+    iconSize:     [28, 28], // size of the icon
+    iconAnchor:   [14, 14], // point of the icon which will correspond to marker's location
+  });
+  var aisBuddyIcon = L.icon({
+    iconUrl: 'img/ais_buddy.png',
+    iconSize:     [24, 24], // size of the icon
+    iconAnchor:   [12, 12], // point of the icon which will correspond to marker's location
+  });
+  var aisMooredIcon = L.icon({
+    iconUrl: 'img/ais_moored.png',
+    iconSize:     [10, 10], // size of the icon
+    iconAnchor:   [5, 5], // point of the icon which will correspond to marker's location
+  });
+  var windIcon = L.icon({
+    iconUrl: 'img/wind_icon.png',
+    iconSize:     [16, 16], // size of the icon
+    iconAnchor:   [8, 8], // point of the icon which will correspond to marker's location
+  });
+  var urlParams = new URLSearchParams(window.location.search);
+
+  const waypointCanvas = new steelseries.DisplayMulti('waypoint', {
+      width: 180,
+      height: 70,
+      unitString: "miles",
+      unitStringVisible: true,
+      headerString: "Waypoint",
+      headerStringVisible: true,
+      detailString: "Time: ",
+      detailUnitString: " hours",
+      valuesNumeric: true,
+      detailStringVisible: true,
+      lcdDecimals: 1,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const speed = new steelseries.DisplayMulti('speed', {
+      width: 180,
+      height: 70,
+      unitString: "kt",
+      unitStringVisible: true,
+      headerString: "Speed",
+      headerStringVisible: true,
+      detailString: "Through Water: ",
+      detailUnitString: " kt",
+      valuesNumeric: true,
+      detailStringVisible: true,
+      lcdDecimals: 1,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const anchorCanvas = new steelseries.DisplayMulti('anchorCanvas', {
+      width: 180,
+      height: 70,
+      unitString: "m",
+      unitStringVisible: true,
+      headerString: "Anchor Radius",
+      headerStringVisible: true,
+      detailString: "Distance to Anchor: ",
+      detailUnitString: " m",
+      valuesNumeric: true,
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const wind = new steelseries.DisplayMulti('wind', {
+      width: 180,
+      height: 70,
+      unitString: "kt",
+      unitStringVisible: true,
+      headerString: "True Wind",
+      headerStringVisible: true,
+      detailString: "5-minute Gust: ",
+      detailUnitString: " kt",
+      valuesNumeric: true,
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const depth = new steelseries.DisplayMulti('depth', {
+      width: 180,
+      height: 70,
+      unitString: "m",
+      unitStringVisible: true,
+      headerString: "Depth",
+      headerStringVisible: true,
+      detailString: "Sea Temperature: ",
+      detailUnitString: "°C",
+      detailStringVisible: true,
+      lcdDecimals: 1,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const battery = new steelseries.DisplayMulti('battery', {
+      width: 180,
+      height: 70,
+      unitString: "%",
+      unitStringVisible: true,
+      headerString: "Battery",
+      headerStringVisible: true,
+      detailString: "Current: ",
+      detailUnitString: "A",
+      detailStringVisible: true,
+      lcdDecimals: 1,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const exhaust = new steelseries.DisplayMulti('exhaust', {
+      width: 180,
+      height: 70,
+      unitString: "°C",
+      unitStringVisible: true,
+      headerString: "Exhaust",
+      headerStringVisible: true,
+      detailString: "Alternator: ",
+      detailUnitString: "°C",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const cockpit  = new steelseries.DisplayMulti('cockpit', {
+      width: 180,
+      height: 70,
+      unitString: "°C",
+      unitStringVisible: true,
+      headerString: "Cockpit",
+      headerStringVisible: true,
+      detailString: "Humidity: ",
+      detailUnitString: "%",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const cabin = new steelseries.DisplayMulti('cabin', {
+      width: 180,
+      height: 70,
+      unitString: "°C",
+      unitStringVisible: true,
+      headerString: "Cabin",
+      headerStringVisible: true,
+      detailString: "Humidity: ",
+      detailUnitString: "%",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const fridge = new steelseries.DisplayMulti('fridge', {
+      width: 180,
+      height: 70,
+      unitString: "°C",
+      unitStringVisible: true,
+      headerString: "Fridge",
+      headerStringVisible: true,
+      detailString: "Freezer: ",
+      detailUnitString: "°C",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const waterTank = new steelseries.DisplayMulti('waterTank', {
+      width: 180,
+      height: 70,
+      unitString: "%",
+      unitStringVisible: true,
+      headerString: "Water Tank",
+      headerStringVisible: true,
+      detailString: "2nd Tank: ",
+      detailUnitString: "%",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const holdingTank = new steelseries.DisplayMulti('holdingTank', {
+      width: 180,
+      height: 70,
+      unitString: "%",
+      unitStringVisible: true,
+      headerString: "Holding Tank",
+      headerStringVisible: true,
+      detailString: "Fuel Tank: ",
+      detailUnitString: "%",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const solar  = new steelseries.DisplayMulti('solar', {
+      width: 180,
+      height: 70,
+      unitString: "Ah",
+      unitStringVisible: true,
+      headerString: "Solar Yield",
+      headerStringVisible: true,
+      detailString: "Current: ",
+      detailUnitString: "A",
+      detailStringVisible: true,
+      lcdDecimals: 1,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const batteryVoltage  = new steelseries.DisplayMulti('batteryVoltage', {
+      width: 180,
+      height: 70,
+      unitString: "V",
+      unitStringVisible: true,
+      headerString: "Battery",
+      headerStringVisible: true,
+      detailString: "Starter Battery: ",
+      detailUnitString: "V",
+      detailStringVisible: true,
+      lcdDecimals: 1,
+      linkOldValue: false,
+      oldValue: 99.9
+  });
+
+  const barometer = new steelseries.DisplayMulti('barometer', {
+      width: 180,
+      height: 70,
+      unitString: "hPa",
+      unitStringVisible: true,
+      headerString: "Barometer",
+      headerStringVisible: true,
+      detailString: "24-hour Change: ",
+      detailUnitString: " hPa",
+      detailStringVisible: true,
+      lcdDecimals: 0,
+      linkOldValue: true,
+      oldValue: 99.9
+  });
+
+  function timeSince(date) {
+    const regex = /^(1\s\w+)s/i;
+    var seconds = Math.floor((new Date() - date) / 1000);
+    var interval = seconds / 31536000;
+    if (interval > 1) {
+      return (Math.floor(interval) + " years").replace(regex, '$1');;
+    }
+    interval = seconds / 2592000;
+    if (interval > 1) {
+      return (Math.floor(interval) + " months").replace(regex, '$1');;
+    }
+    interval = seconds / 86400;
+    if (interval > 1) {
+      return (Math.floor(interval) + " days").replace(regex, '$1');;
+    }
+    interval = seconds / 3600;
+    if (interval > 1) {
+      return (Math.floor(interval) + " hours").replace(regex, '$1');;
+    }
+    interval = seconds / 60;
+    if (interval > 1) {
+      return (Math.floor(interval) + " minutes").replace(regex, '$1');;
+    }
+    return (Math.floor(seconds) + " seconds").replace(regex, '$1');;
+  }
+
+  function toggleSpeedWaypointGauge() {
+    if (currentSpeedWaypointGauge == 'speed') {
+      currentSpeedWaypointGauge = 'waypoint';
+      $('#speed').hide();
+      $('#waypoint').show();
+    } else {
+      currentSpeedWaypointGauge = 'speed';
+      $('#waypoint').hide();
+      $('#speed').show();
+    }
+  }
+
+  function toggleTemperatureGauge() {
+    if (currentTemperatureGauge == 'cabin') {
+      currentTemperatureGauge = 'fridge';
+      $('#cabin').hide();
+      $('#fridge').show();
+    } else {
+      currentTemperatureGauge = 'cabin';
+      $('#fridge').hide();
+      $('#cabin').show();
+    }
+  }
+
+  function removeNotificationsPane() {
+    $('#notifications').css("visibility", "hidden");
+  }
+
+  function stopAutoPan() {
+    preventMapPan = true;
+    $('#centerBoat').fadeIn();
+  }
+
+  function resumeAutoPan() {
+    preventMapPan = false;
+    $('#centerBoat').fadeOut();
+    map.panTo(boat.getLatLng()); 
+  }
+
+  function dropPin(latitude, longitude) {
+    if (pin) {
+      return;
+    }
+    stopAutoPan();
+    let pinIcon = L.icon({
+      iconUrl: 'img/pin_icon.png',
+      iconSize:     [36, 36], // size of the icon
+      iconAnchor:   [18, 36], // point of the icon which will correspond to marker's location
+    });
+    latlng = L.latLng(latitude, longitude)
+    pin = L.marker(latlng, {
+      icon: pinIcon
+    });
+    pin.on('click', function() {
+      removePin();
+    });
+    pin.addTo(map);
+    map.panTo(latlng);
+  }
+
+  function removePin() {
+    preventMapPan = false;
+    map.panTo(boat.getLatLng());
+    map.removeLayer(pin);
+    pin = null;
+  }
+
+  function calculateDistance(lat1, lon1, lat2, lon2) {
+    var R = 6371000; // Radius of the earth in m
+    var dLat = deg2rad(lat2-lat1);  // deg2rad below
+    var dLon = deg2rad(lon2-lon1);
+    var a =
+      Math.sin(dLat/2) * Math.sin(dLat/2) +
+      Math.cos(deg2rad(lat1)) * Math.cos(deg2rad(lat2)) *
+      Math.sin(dLon/2) * Math.sin(dLon/2)
+      ;
+    var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    var d = R * c; // Distance in meters
+    var miles = d / 1000 * 0.539957; // Convert to nautical miles
+    return miles;
+  }
+
+  function capitalize(str) {
+    var lower = String(str).toLowerCase();
+    return lower.replace(/\b([a-z]{1,3}\b|\w)/g, function(x) {
+      return x.toUpperCase();
+    });
+  }
+
+  function deg2rad(deg) {
+    return deg * (Math.PI/180)
+  }
+
+  function createTable(data) { 
+    let content = '';
+    for (let i in data) {
+	let row = data[i];
+	// Down't crowd notifications, filter out "normal"s
+        if (row.priority == 'normal') {
+	  continue;
+        }
+	let date = new Date(0); // The 0 there is the key, which sets the date to the epoch
+	date.setUTCSeconds(row.ts/1000);
+	content += '<tr class="notification">' +
+		   `<td style="width: 25px;">` +
+		   `<a href="#" onclick="dropPin(${row.latitude}, ${row.longitude});">` +
+		   `<img src="img/pin_icon.png" align="center" style="width:19px; height: 19px;"/> ` +
+		   `</a></td>` +
+		   `<td style='padding-right: 5px;'><a href="/signalk-notifications/" target="_blank">${timeSince(date)} ago</a></td>` +
+		   `<td><a href="/signalk-notifications/" target="_blank">${row.message}</a></td>` +
+		   '</tr>';
+    }
+    return content;
+  }
+
+  function refreshNotifications() {
+    if (sinceTs) {
+      $.get(`/plugins/notifications/getNotifications?since=${sinceTs}`, function(data) {
+        if (data.length > 0) {
+          // Update the timestamp
+          sinceTs=data[0].ts;
+          // Insert the new notifications to the top
+          notifications = data.concat(notifications)
+          $("#notifications").css("visibility", "visible");
+          // Alert with the incoming notification
+          alert(`${data[0].message}`);
+        }
+        let content = createTable(notifications);
+        $("#notificationsContent").html(content);
+      });
+    } else {
+      $.get("/plugins/notifications/getNotifications", function(data) {
+        // Set the timestamp for future incremental retrieval
+        sinceTs=data[0].ts;
+        notifications = data;
+        let content = createTable(data);
+        $("#notificationsContent").html(content);
+      }).fail((response) => {
+        // This code will run first, detect a login failure and redirect to login
+	if (response.status = 401) {
+	  location.href="/admin/#/login";
+	}
+      });
+    }
+  }
+
+  function getPoiIcon(type, zoom) {
+    let size = Math.round(zoom*1.5);
+    let url;
+    if (type=='wikipedia') {
+      url = 'img/wikipedia_icon.png';
+    } else {
+      url = `img/activecaptain_${type.toLowerCase()}.png`;
+    }
+    let icon = L.icon({
+      iconUrl:      url,
+      iconSize:     [size, size], // size of the icon
+      iconAnchor:   [0, size], // point of the icon which will correspond to marker's location
+    });
+    return (icon);
+  }
+
+  function publishWikipediaPointsOfInterest(pointsOfInterest) {
+    for (let poiId in pointsOfInterest.wikipedia) {
+      let poi = pointsOfInterest.wikipedia[poiId];
+      let name = poi.name.value;
+      let url = poi.url.value;
+      let position = poi.position.value;
+      let notes = poi.notes.value;
+      const lengthLimit = 280;
+      if (notes.length > lengthLimit) {
+        notes = notes.slice(0, lengthLimit)+'...';
+      }
+
+      let distance = Math.round(10*calculateDistance(position.latitude, position.longitude, currentLatitude, currentLongitude))/10;
+      let text = `<h3><a href='${url}' target='_blank'>${name} (${distance} miles)</h3></a>` +
+                 `<p>${notes}</p>`;
+      let poiKey = `wp_${poiId}`;
+      if (poiKey in pois) {
+        let popup = pois[poiKey].marker.getPopup();
+        popup.setContent(text);
+        popup.update();
+      } else {
+        let icon = getPoiIcon('wikipedia', map.getZoom());
+        let marker = L.marker([position.latitude, position.longitude], {
+          icon: icon
+        })
+        marker.addTo(map);
+        marker.bindPopup(text);
+        pois[poiKey] = {
+          name: name,
+          type: 'wikipedia',
+          url: url,
+          position: position,
+          notes: notes,
+          marker: marker
+        }
+      } 
+    }
+  }
+
+  function publishActiveCaptainPointsOfInterest(pointsOfInterest) {
+    const skipList = ['BoatRamp'];
+    for (let poiId in pointsOfInterest.activeCaptain) {
+      let poi = pointsOfInterest.activeCaptain[poiId];
+      let type = poi.type.value;
+      if (skipList.includes(type)) {
+        // Skip non-relevant types
+        continue;
+      }
+      let name = poi.name.value;
+      let url = poi.url.value;
+      let position = poi.position.value;
+      let notes = poi.notes.value;
+      const lengthLimit = 280;
+      if (notes.length > lengthLimit) {
+        notes = notes.slice(0, lengthLimit)+'...';
+      }
+
+      let distance = Math.round(10*calculateDistance(position.latitude, position.longitude, currentLatitude, currentLongitude))/10;
+      let text = `<h3><a href='${url}' target='_blank'>${name} (${distance} miles)</a></h3>` +
+                 `<p>${notes}</p>`;
+      let poiKey = `ac_${poiId}`;
+      if (poiKey in pois) {
+        let popup = pois[poiKey].marker.getPopup();
+        popup.setContent(text);
+        popup.update();
+      } else {
+        let icon = getPoiIcon(type, map.getZoom());
+        let marker = L.marker([position.latitude, position.longitude], {
+          icon: icon
+        })
+        marker.addTo(map);
+        marker.bindPopup(text);
+        pois[poiKey] = {
+          type: type,
+          name: name,
+          url: url,
+          position: position,
+          notes: notes,
+          marker: marker
+        }
+      } 
+    }
+  }
+
+  function publishObservations(observations) {
+    for (let stationId in observations.windy) {
+      let observation = observations.windy[stationId];
+      let position = observation.position.value;
+      let observationDate = new Date(observation.date.value);
+      if (stationId in weatherStation) {
+          weatherStation[stationId].setLatLng([position.latitude, position.longitude]);
+          let distance = Math.round(10*calculateDistance(position.latitude, position.longitude, currentLatitude, currentLongitude))/10;;
+          let text = `<h3><a href='${observation.url.value}' target='_blank'>${capitalize(observation.name.value)} (${distance} miles)</a></h3>` +
+		     `<table>`;
+                     //`<tr><td class='bold'>Name:</td><td><a href='${observation.url.value}' target='_blank'>${observation.name.value}</a></td></tr>`;
+          if ((observation.weatherText) && (observation.weatherText.value)) {
+            text +=  `<tr><td class='bold'>Weather:</td><td>${observation.weatherText.value}</td></tr>`;
+          }
+          if (observation.wind.speed.value !== null) {
+            text +=  `<tr><td class='bold'>Wind Speed:</td><td>${Math.round(10*observation.wind.speed.value * 1.94384)/10} knots</td></tr>`;
+          }
+          if (observation.wind.gust.value !== null) {
+            text +=  `<tr><td class='bold'>Wind Gust:</td><td>${Math.round(10*observation.wind.gust.value * 1.94384)/10} knots</td></tr>`;
+          }
+          if (observation.temperature.value) {
+            text +=   `<tr><td class='bold'>Temperature:</td><td>${Math.round(observation.temperature.value - 273.15)} °C</td></tr>`;
+          }
+          if ((observation.pressure) && (observation.pressure.value)) {
+            text +=   `<tr><td class='bold'>Atmospheric Pressure:</td><td>${Math.round(observation.pressure.value/100)} hPa</td></tr>`;
+          }
+          text +=     `<tr><td class='bold'>Received:</td><td>${timeSince(observationDate)} ago</td></tr>` +
+                      `</table>`;
+          let popup = weatherStation[stationId].getPopup();
+          popup.setContent(text);
+          popup.update();
+      } else {
+        weatherStation[stationId] = L.marker([position.latitude, position.longitude], {
+           icon: windIcon,
+           opacity: 0.75
+        })
+        weatherStation[stationId].addTo(map).bindPopup('Please wait to be updated'); 
+      }
+      if (observation.wind.direction.value !== null) {
+        weatherStation[stationId].setRotationAngle((observation.wind.direction.value * 57.295779513) - 180);
+      }
+    }
+  }
+
+  function refreshBoatData() {
+    $.get('/signalk/v1/api/vessels/self', (data) => {
+      // If boat marker is not ready, skip
+      if (!boat) {
+        return;
+      }
+      let observations = data.observations;
+      if (observations && observations.windy) {
+        publishObservations(observations);
+      }
+      let pointsOfInterest = data.pointsOfInterest;
+      if (pointsOfInterest && pointsOfInterest.activeCaptain) {
+        publishActiveCaptainPointsOfInterest(pointsOfInterest);
+      }
+      if (pointsOfInterest && pointsOfInterest.wikipedia) {
+        publishWikipediaPointsOfInterest(pointsOfInterest);
+      }
+      // Set the boat position and heading, adjust map 
+      let navigation = data.navigation;
+      let position = navigation.position.value;
+      // Set gloabl variables
+      currentLatitude = position.latitude;
+      currentLongitude = position.longitude;
+      let currentPosition = L.latLng(currentLatitude, currentLongitude);
+      boat.setLatLng(currentPosition);
+
+      // Don't pan the map if pin is set
+      if (!preventMapPan) {
+        map.panTo(currentPosition);
+      }
+
+      let heading = navigation.headingTrue?.value;
+      if (heading) {
+        heading = heading *  57.295779513; // Convert to degrees
+      } else {
+        heading = 0;
+      }
+      boat.setRotationAngle(heading);
+
+      // Check if waypoints are set
+      if ((navigation.currentRoute) && (navigation.currentRoute.waypoints)) {
+        let waypoints = navigation.currentRoute.waypoints.value;
+        for (let i=0;i < waypoints.length; i++) {
+          let waypoint = waypoints[i];
+          if (waypoint.name == 'ORIGIN') {
+            // This is an assumption based on observed Raymarine behavior, might be buggy
+            let destination = waypoints[i+1].position.value;
+            let destinatioPosition = L.latLng(destination.latitude, destination.longitude);
+            let distance = currentPosition.distanceTo(destinatioPosition);
+            // Convert to nautical miles (from meters)
+            distance = Math.round(distance * 0.000539957 * 10)/10;
+            waypointCanvas.setValue(distance);
+
+            let speedOverGround = data.navigation.speedOverGround.value * 1.94384;
+            let timeToWaypoint = Math.round(10 * distance / speedOverGround)/10;
+            waypointCanvas.setAltValue(timeToWaypoint);
+          } 
+        }
+      } else {
+        //$('#waypoint').show()
+      }
+
+      // Check if anchor is set
+      if ((navigation.anchor) &&
+	   (navigation.anchor.position) &&
+           (navigation.anchor.position.value)) {
+        let anchorPosition = navigation.anchor.position.value;
+        let maxRadius = Number(navigation.anchor.maxRadius.value);
+        let currentRadius = Number(navigation.anchor.currentRadius.value);
+        let anchorLatitude = anchorPosition.latitude;
+        let anchorLongitude = anchorPosition.longitude;
+        let anchorLatLng = L.latLng(anchorLatitude, anchorLongitude);
+
+        // Drop the icon or if there set the radius
+        if (anchor) {
+          anchorRadius.setRadius(maxRadius); 
+          anchorCanvas.setValue(maxRadius);
+          anchorCanvas.setAltValue(currentRadius);
+        } else {
+          anchor = L.marker(anchorLatLng, {
+            icon: anchorIcon
+          });
+          anchor.addTo(map);
+
+          // Put the anchor icon on the map
+          anchorRadius = L.circle(anchorLatLng, maxRadius);
+          anchorRadius.addTo(map);
+          // Swap the speed gauge with anchor gauge
+          $('#speed').hide();
+          $('#waypoint').hide();
+          $('#anchorCanvas').show();
+        }
+      } else if (anchor) {
+        map.removeLayer(anchor);
+        map.removeLayer(anchorRadius);
+        // Re-swap the speed gauge with anchor gauge
+        $('#anchorCanvas').hide();
+        $('#speed').show();
+        $('#waypoint').hide();
+        anchor = null;
+      }
+      
+      // Set battery and solar data
+      if ((data.electrical) && (data.electrical.batteries) &&
+          (data.electrical.batteries['278']) &&
+          (data.electrical.solar['279'])) {
+        let batteryData = data.electrical.batteries['278'];
+        let solarData = data.electrical.solar['279'];
+        let starterData = data.electrical.batteries['278-second'];
+        battery.setValue(batteryData.capacity.stateOfCharge.value*100);
+        battery.setAltValue(batteryData.current.value);
+        batteryVoltage.setValue(batteryData.voltage.value);
+        batteryVoltage.setAltValue(starterData.voltage.value);
+        // 13.4V is an approximation of solar charging voltage
+        // Usually lower than this if battery is around 50% and higher than this if battery is getting full
+        solar.setValue(solarData.yieldToday.value/3600/13.4);
+        solar.setAltValue(solarData.current.value);
+      }
+
+      // Set speed data
+      let speedOverGround=data.navigation.speedOverGround.value;
+      let speedThroughWater=data.navigation.speedThroughWater.value;
+      speed.setValue(speedOverGround*1.94384);
+      speed.setAltValue(speedThroughWater*1.94384);
+
+      // Set wind data
+      let currentWindSpeed=data.environment.wind.speedTrue.value;
+      let gustSpeed=data.environment.wind.fiveMinutes.gustTrue.value;
+      wind.setValue(currentWindSpeed*1.94384);
+      wind.setAltValue(gustSpeed*1.94384);
+
+      // Set depth data and sea/cockpit/cabin/fridge temperatures
+      depth.setValue(data.environment.depth.belowKeel.value);
+      depth.setAltValue(data.environment.water.temperature.value-273.15);
+      cockpit.setValue(data.environment.outside.temperature.value-273.15);
+      cockpit.setAltValue(data.environment.outside.humidity.value*100);
+      cabin.setValue(data.environment.inside.temperature.value-273.15);
+      cabin.setAltValue(data.environment.inside.humidity.value*100);
+      if ((data.environment.fridge) && (data.environment.fridge.temperature)) {
+        fridge.setValue(data.environment.fridge.temperature.value-273.15);
+      } else {
+        fridge.setValue(NaN);
+      }
+      if ((data.environment.freezer) && (data.environment.freezer.temperature)) {
+        fridge.setAltValue(data.environment.freezer.temperature.value-273.15);
+      } else {
+        fridge.setAltValue(NaN);
+      }
+
+      // Set tank levels
+      if ((data.tanks) && (data.tanks.freshWater)) {
+        waterTank.setValue(data.tanks.freshWater['3'].currentLevel.value*100); 
+        waterTank.setAltValue(data.tanks.freshWater['1'].currentLevel.value*100); 
+      }
+      if ((data.tanks) && (data.tanks.wasteWater) && (data.tanks.fuel)) {
+        holdingTank.setValue(data.tanks.wasteWater['2'].currentLevel.value*100); 
+        holdingTank.setAltValue(data.tanks.fuel['4'].currentLevel.value*100); 
+      }
+
+      // Set exhaust and alternator temperatures
+      if ((data.propulsion) && (data.propulsion['0']) && 
+          (data.propulsion['0'].exhaustTemperature) &&
+          (data.propulsion['0'].alternatorTemperature)) {
+        exhaust.setValue(data.propulsion['0'].exhaustTemperature.value-273.15);
+        exhaust.setAltValue(data.propulsion['0'].alternatorTemperature.value-273.15);
+      }
+
+      // Set barometer
+      if ((data.environment.inside) && (data.environment.inside.pressure)) {
+        barometer.setValue(data.environment.inside.pressure.value/100);
+      }
+      if ((data.environment.inside) && (data.environment.inside.pressure) &&
+          (data.environment.inside.pressure.oneDayAgo != null)) {
+        let barometerDelta = data.environment.inside.pressure.value - data.environment.inside.pressure.oneDayAgo.value;
+        barometer.setAltValue(barometerDelta/100);
+      } else {
+        barometer.setAltValue(NaN);
+      }
+    }).fail(() => {
+    });
+  }
+
+  // Requires AISHub key and Buddylist plugin
+  function findBuddyBoats(targets) {
+    // Don't hit the API more than every 60 seconds
+    let now = new Date();
+    now = now.getTime();
+    if ((lastAisHubContact) && (now - lastAisHubContact) < 60*1000) {
+      return;
+    }
+    lastAisHubContact = now;
+
+    $.get('/signalk/v1/api/resources/buddies', (vessels) => {
+      const mmsi = Array.from(Object.values(vessels), item => item.urn.split(':')[4]);
+      let mmsiList = mmsi.join(',');
+      let url = `https://data.aishub.net/ws.php?username=${apiKey}&format=1&output=json&compress=0&mmsi=${mmsiList}`;
+      
+    }).fail((response) => {
+      app.debug('Buddylist plugin not found');
+    });
+
+  }
+
+  function refreshAisData() {
+    $.get('/signalk/v1/api/vessels', (vessels) => {
+      let detectedTargets = [];
+      for (let key in vessels) {
+	let vessel=vessels[key];
+	if ((!vessel.mmsi) || (vessel.mmsi == mmsi)) {
+	  continue;
+	}
+	if (!("navigation" in vessel) || !("position" in vessel.navigation)) {
+	  continue;
+	}
+	let position = vessel.navigation.position.value;
+        //let timeStamp = Date.parse(vessel.navigation.position.timestamp);
+        let timeStamp = new Date(vessel.navigation.position.timestamp);
+	let distance = calculateDistance(position.latitude, position.longitude, currentLatitude, currentLongitude);
+        if (distance < 1) {
+	  distance = `${Math.round(distance*1852)} meters`;
+        } else {
+          distance = `${Math.round(distance)} miles`;
+        }
+
+	let heading= vessel.navigation.courseOverGroundTrue?.value;
+        if (heading) {
+          heading = heading *  57.295779513; // Convert to degrees
+        } else {
+          heading = vessel.navigation.headingTrue?.value;
+          if (heading) {
+            heading = heading *  57.295779513; // Convert to degrees
+          } else {
+            heading = 0;
+          }
+        }
+
+        let speed=vessel.navigation.speedOverGround?.value;
+        let speedText;
+        if (speed) {
+          speed = speed*1.94384;
+          if (speed < 10) {
+            speed = Math.round(speed*10)/10;
+          } else {
+            speed = Math.round(speed);
+          }
+          speedText = `${speed} kt`;
+        } else {
+          speed = 0;
+          speedText = 'Stationary';
+        }
+
+        let destination = vessel.navigation.destination?.commonName.value;
+        if (destination) {
+          destination = `${capitalize(destination)}`;
+          let googleSearchUrl = `http://maps.google.com/?q=${encodeURIComponent(destination)}`;
+          destination = `<a target='_blank' href='${googleSearchUrl}'>${destination}</a>`;
+        } else {
+          destination = 'Unknown';
+        }
+
+        let length = vessel.design?.length?.value.overall;
+        if (length) {
+          length = `${length} m`;
+        } else {
+          length = 'Unknown';
+        }
+
+        let shipType = vessel.design?.aisShipType?.value.name;
+        if (!shipType) {
+          shipType = 'Unknown';
+        }
+
+	detectedTargets.push(vessel.mmsi);
+        if (!vessel.name) {
+          vessel.name = "Unknown";
+        } else {
+          vessel.name = capitalize(vessel.name);
+        }
+
+        let icon;
+        if (vessel.buddy) {
+          icon = aisBuddyIcon;
+        } else {
+          if (speed < 1) {
+            icon = aisMooredIcon;
+          } else if (vessel.sensors.ais.class.value === "A") {
+            icon = aisBigIcon;
+          } else {
+            icon = aisIcon;
+          }
+        }
+
+        if (vessel.mmsi in target) {
+          target[vessel.mmsi].setIcon(icon);
+	  target[vessel.mmsi].setLatLng([position.latitude, position.longitude]);
+          let url = `https://www.marinetraffic.com/en/ais/details/ships/mmsi:${vessel.mmsi}`;
+          let text = `<table>` +
+                     `<tr><td class='bold'>Name:</td><td><a href='${url}' target='_blank'>${vessel.name}</a></td></tr>` +
+                     `<tr><td class='bold'>MMSI:</td><td><a href='${url}' target='_blank'>${vessel.mmsi}</a></td></tr>` +
+                     `<tr><td class='bold'>Distance:</td><td>${distance}</td></tr>` +
+                     `<tr><td class='bold'>Speed:</td><td>${speedText}</td></tr>` +
+                     `<tr><td class='bold'>Length:</td><td>${length}</td></tr>` +
+                     `<tr><td class='bold'>AIS Class:</td><td>${vessel.sensors.ais.class.value}</td></tr>` +
+                     `<tr><td class='bold'>Ship Type:</td><td>${shipType}</td></tr>`;
+	  if (destination !== 'Unknown') {
+             text += `<tr><td class='bold'>Destination:</td><td>${destination}</td></tr>`;
+          }
+          text += `<tr><td class='bold'>Received:</td><td>${timeSince(timeStamp)} ago</td></tr>` +
+                  `</table>`;
+          let popup = target[vessel.mmsi].getPopup();
+          popup.setContent(text);
+          popup.update();
+	} else {
+         target[vessel.mmsi] = L.marker([position.latitude, position.longitude], {
+           icon: icon
+	  })
+	  target[vessel.mmsi].addTo(map).bindPopup('Please wait to be updated');
+	}
+        target[vessel.mmsi].setRotationAngle(heading);
+      }
+
+      // Remove vessels that oved out of range
+      for (let mmsi in target) {
+ 	if (!detectedTargets.includes(mmsi)) {
+	  map.removeLayer(target[mmsi]);
+	  delete target[mmsi];
+        }
+      }
+
+     // Find the buddy boats that are not within range
+     //findBuddyBoats(detectedTargets);
+    });
+  }
+
+  function updateContent() {
+    refreshNotifications();
+    refreshBoatData();
+    refreshAisData();
+  }
+
+  $.get('/signalk/v1/api/vessels/self', (data) => {
+      mmsi = data.mmsi;
+      data = data.navigation;
+      currentLatitude = data.position.value.latitude;
+      currentLongitude = data.position.value.longitude;
+      let heading = data.headingTrue?.value;
+      if (heading) {
+        heading = heading *  57.295779513; // Convert to degrees
+      } else {
+        heading = 0;
+      }
+      let latlng = L.latLng(currentLatitude, currentLongitude);
+      zoom = 17;
+      if (urlParams.has('zoom')) {
+        zoom = urlParams.get('zoom');
+      }
+      map.setView(latlng, zoom);
+      boat = L.marker(latlng, {
+          rotationAngle: heading,
+          icon: boatIcon
+      }).addTo(map)
+  });
+
+  var satelliteLayer = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+      //attribution: 'Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community',
+      maxZoom: 19
+  });
+  satelliteLayer.addTo(map);
+
+  var navionicsLayer = L.tileLayer('/plugins/navionics/retrieveRegularTile?x={x}&y={y}&z={z}', {
+      maxZoom: 19 
+  });
+
+  var navionicsSonarLayer = L.tileLayer('/plugins/navionics/retrieveSonarTile?x={x}&y={y}&z={z}', {
+      maxZoom: 19
+  });
+
+  var osmLayer = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+      maxZoom: 19
+  });
+
+  var baseMaps = {
+    "Satellite": satelliteLayer,
+    "Navionics": navionicsLayer,
+    "Navionics Sonar": navionicsSonarLayer,
+    "OpenStreetMap": osmLayer
+  };
+
+  var layerControl = L.control.layers(baseMaps).addTo(map);
+
+  setInterval( () => {
+    updateContent();
+  }, 1500);
+
+</script>
+</body>
+</html>

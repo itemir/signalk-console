@@ -1,0 +1,27 @@
+{
+  "name": "renaissance",
+  "version": "1.0.0",
+  "description": "Your guide at anchor or underway",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "signalk-webapp"
+  ],
+  "signalk": {
+    "appIcon": "img/cruisers.png",
+    "displayName": "Renaissance Console"
+  },
+  "author": {
+    "name": "Ilker Temir",
+    "email": "ilker@ilkertemir.com"
+  },
+  "license": "Apache-2.0",
+  "dependencies": {
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/itemir/signalk-console"
+  }
+}
