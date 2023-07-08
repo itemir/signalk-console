@@ -10,7 +10,7 @@
     "signalk-webapp"
   ],
   "signalk": {
-    "appIcon": "img/cruisers.png",
+    "appIcon": "img/app_icon.png",
     "displayName": "Renaissance Console"
   },
   "author": {
