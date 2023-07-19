@@ -3,7 +3,7 @@
 <head>
     <meta charset="utf-8" />
     <meta http-equiv="X-UA-Compatible" content="IE=edge" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale:1, user-scalable: yes" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=yes" />
     <title>Renaissance</title>
     <link rel="stylesheet" href="leaflet/leaflet.css"/>
     <script src="leaflet/leaflet.js"></script>
@@ -12,16 +12,17 @@
     <script src="js/steelseries.js"></script>
     <link rel="icon" href="img/favicon.png" type="image/png" />
     <style>
-       body {
-          padding: 0;
-          margin: 0;
-       }
        html, body, #map {
           height: 100%;
           width: 100%;
           min-width: 1200px;
           z-index: 1;
           position: relative;
+       }
+
+       body {
+          padding: 0;
+          margin: 0;
        }
 
        #map_container {
@@ -84,7 +85,7 @@
   <div id="map"></div>
   <div id="centerBoat">
     <a href="#" onclick="resumeAutoPan();">
-      <img src="img/boat.png" style="width: 24px; height: 48px;">
+      <img src="img/boat_red.png" style="width: 24px; height: 48px;">
     </a>
   </div>
   <div id="info">
@@ -129,6 +130,14 @@
     </table>
  </div>
 <script>
+  // Disable screen lock
+  if ('wakeLock' in navigator) {
+    navigator.wakeLock.request('screen').then(lock => {
+      // Disabling screen lock succeeded, accept quietly
+    }).catch(error => {
+      // Disabling screen lock failed, accept quietly
+    });
+  }
   var boat;
   var anchor;
   var anchorRadius;
@@ -139,7 +148,8 @@
   var target = {};
   var weatherStation = {};
   var pois = {};
-  var pin;
+  var notificationPin;
+  var informationPin;
   var sinceTs;
   var notifications = [];
   var preventMapPan = false;
@@ -162,22 +172,21 @@
     stopAutoPan();
   });
 
+  map.on('click', function(e){
+    dropInformationPin(e.latlng);
+  });
+
   map.on('zoomend', function() {
     let zoom = map.getZoom();
     // Boat may not be set yet
     if (boat && currentLatitude && currentLongitude && currentHeading) {
       let boatSize = Math.round(zoom * 1.5);
       let boatIcon = L.icon({
-        iconUrl: 'img/boat.png',
+        iconUrl: 'img/boat_red.png',
         iconSize:     [boatSize, boatSize*2], // size of the icon
-        //iconAnchor:   [Math.round(boatSize/2), boatSize], // point of the icon which will correspond to marker's location
+        iconAnchor:   [Math.round(boatSize/2), boatSize], // point of the icon which will correspond to marker's location
       });
-      map.removeLayer(boat);
-      let latlng = L.latLng(currentLatitude, currentLongitude);
-      boat = L.marker(latlng, {
-          rotationAngle: currentHeading,
-          icon: boatIcon
-      }).addTo(map)
+      boat.setIcon(boatIcon);
     }
     for (let poiId in pois) {
       let poi = pois[poiId];
@@ -187,9 +196,10 @@
   });
 
   var boatIcon = L.icon({
-    iconUrl: 'img/boat.png',
+    iconUrl: 'img/boat_red.png',
     iconSize:     [24, 48], // size of the icon
     iconAnchor:   [12, 24], // point of the icon which will correspond to marker's location
+    rotationOrigin: 'center center'
   });
   var anchorIcon = L.icon({
     iconUrl: 'img/anchor.png',
@@ -200,11 +210,13 @@
     iconUrl: 'img/ais_boat.png',
     iconSize:     [24, 24], // size of the icon
     iconAnchor:   [12, 12], // point of the icon which will correspond to marker's location
+    rotationOrigin: 'center center'
   });
   var aisBigIcon = L.icon({
     iconUrl: 'img/ais_boat.png',
     iconSize:     [28, 28], // size of the icon
     iconAnchor:   [14, 14], // point of the icon which will correspond to marker's location
+    rotationOrigin: 'center center'
   });
   var aisBuddyIcon = L.icon({
     iconUrl: 'img/ais_buddy.png',
@@ -220,6 +232,7 @@
     iconUrl: 'img/wind_icon.png',
     iconSize:     [16, 16], // size of the icon
     iconAnchor:   [8, 8], // point of the icon which will correspond to marker's location
+    rotationOrigin: 'center center'
   });
   var urlParams = new URLSearchParams(window.location.search);
 
@@ -517,8 +530,20 @@
     map.panTo(boat.getLatLng()); 
   }
 
-  function dropPin(latitude, longitude) {
-    if (pin) {
+  function dropInformationPin(latLng) {
+    if (informationPin) {
+      removeInformationPin();
+      return;
+    }
+    informationPin = new L.marker(latLng);
+    informationPin.addTo(map);
+    informationPin.on('click', function() {
+      removeInformationPin();
+    });
+  }
+
+  function dropNotificationPin(latitude, longitude) {
+    if (notificationPin) {
       return;
     }
     stopAutoPan();
@@ -528,21 +553,26 @@
       iconAnchor:   [18, 36], // point of the icon which will correspond to marker's location
     });
     latlng = L.latLng(latitude, longitude)
-    pin = L.marker(latlng, {
+    notificationPin = L.marker(latlng, {
       icon: pinIcon
     });
-    pin.on('click', function() {
-      removePin();
+    notificationPin.on('click', function() {
+      removeNotificationPin();
     });
-    pin.addTo(map);
+    notificationPin.addTo(map);
     map.panTo(latlng);
   }
 
-  function removePin() {
+  function removeNotificationPin() {
     preventMapPan = false;
     map.panTo(boat.getLatLng());
-    map.removeLayer(pin);
-    pin = null;
+    map.removeLayer(notificationPin);
+    notificationPin = null;
+  }
+
+  function removeInformationPin() {
+    map.removeLayer(informationPin);
+    informationPin = null;
   }
 
   function calculateDistance(lat1, lon1, lat2, lon2) {
@@ -571,7 +601,7 @@
     return deg * (Math.PI/180)
   }
 
-  function createTable(data) { 
+  function createNotificationTable(data) {
     let content = '';
     for (let i in data) {
 	let row = data[i];
@@ -583,7 +613,7 @@
 	date.setUTCSeconds(row.ts/1000);
 	content += '<tr class="notification">' +
 		   `<td style="width: 25px;">` +
-		   `<a href="#" onclick="dropPin(${row.latitude}, ${row.longitude});">` +
+		   `<a href="#" onclick="dropNotificationPin(${row.latitude}, ${row.longitude});">` +
 		   `<img src="img/pin_icon.png" align="center" style="width:19px; height: 19px;"/> ` +
 		   `</a></td>` +
 		   `<td style='padding-right: 5px;'><a href="/signalk-notifications/" target="_blank">${timeSince(date)} ago</a></td>` +
@@ -605,7 +635,7 @@
           // Alert with the incoming notification
           alert(`${data[0].message}`);
         }
-        let content = createTable(notifications);
+        let content = createNotificationTable(notifications);
         $("#notificationsContent").html(content);
       });
     } else {
@@ -613,7 +643,7 @@
         // Set the timestamp for future incremental retrieval
         sinceTs=data[0].ts;
         notifications = data;
-        let content = createTable(data);
+        let content = createNotificationTable(data);
         $("#notificationsContent").html(content);
       }).fail((response) => {
         // This code will run first, detect a login failure and redirect to login
@@ -625,7 +655,7 @@
   }
 
   function getPoiIcon(type, zoom) {
-    let size = Math.round(zoom*1.5);
+    let size = Math.round(zoom*1.2);
     let url;
     if (type=='wikipedia') {
       url = 'img/wikipedia_icon.png';
@@ -794,7 +824,7 @@
       let currentPosition = L.latLng(currentLatitude, currentLongitude);
       boat.setLatLng(currentPosition);
 
-      // Don't pan the map if pin is set
+      // Don't pan the map if prevented
       if (!preventMapPan) {
         map.panTo(currentPosition);
       }
@@ -881,9 +911,9 @@
         battery.setAltValue(batteryData.current.value);
         batteryVoltage.setValue(batteryData.voltage.value);
         batteryVoltage.setAltValue(starterData.voltage.value);
-        // 13.4V is an approximation of solar charging voltage
+        // 13.35V is an approximation of solar charging voltage
         // Usually lower than this if battery is around 50% and higher than this if battery is getting full
-        solar.setValue(solarData.yieldToday.value/3600/13.4);
+        solar.setValue(solarData.yieldToday.value/3600/13.35);
         solar.setAltValue(solarData.current.value);
       }
 
@@ -1127,6 +1157,7 @@
       map.setView(latlng, zoom);
       boat = L.marker(latlng, {
           rotationAngle: currentHeading,
+          rotationOrigin: 'center center',
           icon: boatIcon
       }).addTo(map)
   });
