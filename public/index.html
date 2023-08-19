@@ -172,9 +172,12 @@
     stopAutoPan();
   });
 
-  map.on('click', function(e){
+  /*
+  map.on('contextmenu', function(e){
     dropInformationPin(e.latlng);
+    alert(e.latlng);
   });
+  */
 
   map.on('zoomend', function() {
     let zoom = map.getZoom();
@@ -672,11 +675,11 @@
 
   function publishWikipediaPointsOfInterest(pointsOfInterest) {
     for (let poiId in pointsOfInterest.wikipedia) {
-      let poi = pointsOfInterest.wikipedia[poiId];
-      let name = poi.name.value;
-      let url = poi.url.value;
-      let position = poi.position.value;
-      let notes = poi.notes.value;
+      let poi = pointsOfInterest.wikipedia[poiId].value;
+      let name = poi.name;
+      let url = poi.url;
+      let position = poi.position;
+      let notes = poi.notes;
       const lengthLimit = 280;
       if (notes.length > lengthLimit) {
         notes = notes.slice(0, lengthLimit)+'...';
@@ -712,16 +715,16 @@
   function publishActiveCaptainPointsOfInterest(pointsOfInterest) {
     const skipList = ['BoatRamp'];
     for (let poiId in pointsOfInterest.activeCaptain) {
-      let poi = pointsOfInterest.activeCaptain[poiId];
-      let type = poi.type.value;
+      let poi = pointsOfInterest.activeCaptain[poiId].value;
+      let type = poi.type;
       if (skipList.includes(type)) {
         // Skip non-relevant types
         continue;
       }
-      let name = poi.name.value;
-      let url = poi.url.value;
-      let position = poi.position.value;
-      let notes = poi.notes.value;
+      let name = poi.name;
+      let url = poi.url;
+      let position = poi.position;
+      let notes = poi.notes;
       const lengthLimit = 280;
       if (notes.length > lengthLimit) {
         notes = notes.slice(0, lengthLimit)+'...';
@@ -757,6 +760,9 @@
   function publishObservations(observations) {
     for (let stationId in observations.windy) {
       let observation = observations.windy[stationId];
+      if (!observation || !observation.position || !observation.date) {
+	continue;
+      }
       let position = observation.position.value;
       let observationDate = new Date(observation.date.value);
       if (stationId in weatherStation) {
