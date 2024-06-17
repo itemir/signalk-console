@@ -965,9 +965,9 @@
 
       // Set exhaust and alternator temperatures
       if ((data.propulsion) && (data.propulsion['0']) && 
-          (data.propulsion['0'].exhaustTemperature) &&
+          (data.propulsion['0'].oilTemperature) &&
           (data.propulsion['0'].alternatorTemperature)) {
-        exhaust.setValue(data.propulsion['0'].exhaustTemperature.value-273.15);
+        exhaust.setValue(data.propulsion['0'].oilTemperature.value-273.15);
         exhaust.setAltValue(data.propulsion['0'].alternatorTemperature.value-273.15);
       }
 
@@ -1186,8 +1186,13 @@
       maxZoom: 19
   });
 
+  var nauticalLayer = L.tileLayer('https://www.marinetraffic.com/TMS/1.0.0/TX97/{z}/{x}/{y}.png?v=3', {
+      maxZoom: 19
+  });
+
   var baseMaps = {
     "Satellite": satelliteLayer,
+    "C-MAP": nauticalLayer,
     "Navionics": navionicsLayer,
     "Navionics Sonar": navionicsSonarLayer,
     "OpenStreetMap": osmLayer
